@@ -499,11 +499,17 @@ class ModelLogger:
             state_dict = self.state_dict_converter(state_dict)
             os.makedirs(self.output_path, exist_ok=True)
             path = os.path.join(self.output_path, f"epoch-{epoch_id}.safetensors")
+            # limou
+            print("on_epoch_end, skip saving model", flush=True)
+            return
             accelerator.save(state_dict, path, safe_serialization=True)
 
 
     def on_training_end(self, accelerator, model, save_steps=None):
         if save_steps is not None and self.num_steps % save_steps != 0:
+            # limou
+            print("on_training_end, skip saving model", flush=True)
+            return
             self.save_model(accelerator, model, f"step-{self.num_steps}.safetensors")
 
 
@@ -549,7 +555,37 @@ def launch_training_task(
     )
     model, optimizer, dataloader, scheduler = accelerator.prepare(model, optimizer, dataloader, scheduler)
     
+    ENABLE_PROFILER = True
+    def get_profiler_context():
+        if not ENABLE_PROFILER or not accelerator.is_main_process:
+            return None
+        schedule = torch.profiler.schedule(
+            wait=5,
+            warmup=5,
+            active=1,
+            repeat=1,
+        )
+        profiler = torch.profiler.profile(
+            schedule=schedule,
+            activities=[
+                torch.profiler.ProfilerActivity.CPU,
+                torch.profiler.ProfilerActivity.CUDA,
+            ],
+            record_shapes=True,
+            profile_memory=False,
+            with_stack=True,
+            on_trace_ready=torch.profiler.tensorboard_trace_handler(
+                os.path.join("./profile_results/")
+            ),
+        )
+        return profiler
+
+    prof = get_profiler_context()
+    # limou
+    print("start training...", flush=True)
     for epoch_id in range(num_epochs):
+        if epoch_id == 0 and prof:
+            prof.start()
         for data in tqdm(dataloader):
             with accelerator.accumulate(model):
                 optimizer.zero_grad()
@@ -561,9 +597,15 @@ def launch_training_task(
                 optimizer.step()
                 model_logger.on_step_end(accelerator, model, save_steps)
                 scheduler.step()
+            if epoch_id == 0 and prof:
+                prof.step()
         if save_steps is None:
             model_logger.on_epoch_end(accelerator, model, epoch_id)
+        if epoch_id == 0 and prof:
+            prof.stop()
     model_logger.on_training_end(accelerator, model, save_steps)
+    # limou
+    print("training done.", flush=True)
 
 
 def launch_data_process_task(
