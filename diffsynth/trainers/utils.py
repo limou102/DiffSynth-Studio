@@ -488,6 +488,8 @@ class ModelLogger:
     def on_step_end(self, accelerator, model, save_steps=None):
         self.num_steps += 1
         if save_steps is not None and self.num_steps % save_steps == 0:
+            print("on_step_end, skip saving model", flush=True)
+            return
             self.save_model(accelerator, model, f"step-{self.num_steps}.safetensors")
 
 
@@ -555,7 +557,7 @@ def launch_training_task(
     )
     model, optimizer, dataloader, scheduler = accelerator.prepare(model, optimizer, dataloader, scheduler)
     
-    ENABLE_PROFILER = True
+    ENABLE_PROFILER = False
     def get_profiler_context():
         if not ENABLE_PROFILER or not accelerator.is_main_process:
             return None
@@ -582,10 +584,15 @@ def launch_training_task(
 
     prof = get_profiler_context()
     # limou
-    print("start training...", flush=True)
+    print("start training, data_length={}...".format(len(dataloader)), flush=True)
     for epoch_id in range(num_epochs):
         if epoch_id == 0 and prof:
             prof.start()
+        
+        num_iters = 0
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
+        start_event.record()
         for data in tqdm(dataloader):
             with accelerator.accumulate(model):
                 optimizer.zero_grad()
@@ -599,10 +606,17 @@ def launch_training_task(
                 scheduler.step()
             if epoch_id == 0 and prof:
                 prof.step()
+            num_iters += 1
         if save_steps is None:
             model_logger.on_epoch_end(accelerator, model, epoch_id)
         if epoch_id == 0 and prof:
             prof.stop()
+        end_event.record()
+        end_event.synchronize()
+        epoch_time = start_event.elapsed_time(end_event)
+        print("num_iters={}, epoch_time={}ms, time_per_iter={}ms".format(
+            num_iters, epoch_time, epoch_time/num_iters), flush=True)
+
     model_logger.on_training_end(accelerator, model, save_steps)
     # limou
     print("training done.", flush=True)

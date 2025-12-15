@@ -26,6 +26,9 @@ except ModuleNotFoundError:
     
     
 def flash_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, num_heads: int, compatibility_mode=False):
+    # limou
+    # print("flash_attn, num_heads={}, q.shape={}, k.shape={}, v.shape={}".format(
+    #     num_heads, q.shape, k.shape, v.shape), flush=True)
     if compatibility_mode:
         q = rearrange(q, "b s (n d) -> b n s d", n=num_heads)
         k = rearrange(k, "b s (n d) -> b n s d", n=num_heads)
